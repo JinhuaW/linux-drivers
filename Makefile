@@ -1,9 +1,13 @@
 obj-m := globalfifo.o
-PWD :=$(shell pwd)
 
-KDIR := /home/jinhuawu/Data/buildroot_vexpress/output/build/linux-c787c02e1d83382591c427319f384175158e5d37
+BUILDROOT_OUTPUT=$(BUILDROOT)/output
+
+OPTIONS= -C $(LINUX_DIR) M=$(PWD) ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(TARGET_CROSS)
 
 all:
-	make -C $(KDIR) M=$(PWD) ARCH=arm CROSS_COMPILE=/home/jinhuawu/Data/buildroot_vexpress/output/host/usr/bin/arm-buildroot-linux-gnueabi- modules
+	make $(OPTIONS) modules
 clean:
-	rm -f *.ko *.o *.mod.o *.mod.c *.symvers
+	make $(OPTIONS) clean
+install:
+	make $(OPTIONS) INSTALL_MOD_PATH=$(BILDROOT_OUTPUT)/target INSTALL_MOD_STRIP=1 INSTALL_MOD_DIR=spe modules_install
+header_install:
