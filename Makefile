@@ -10,4 +10,5 @@ clean:
 	make $(OPTIONS) clean
 install:
 	make $(OPTIONS) INSTALL_MOD_PATH=$(BILDROOT_OUTPUT)/target INSTALL_MOD_STRIP=1 INSTALL_MOD_DIR=spe modules_install
-header_install:
+headers_install:
+	@echo "installing headers"
