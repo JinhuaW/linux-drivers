@@ -7,17 +7,12 @@
 #include <linux/err.h>
 #include <linux/types.h>
 #include <linux/printk.h>
-
-struct test_irq_info {
-	int irq;
-	struct platform_device *pdev;
-};
+#include <linux/uio_driver.h>
 
 
-static irqreturn_t test_irq_handler(int irq, void *arg)
+static irqreturn_t test_irq_handler(int irq,  struct uio_info *uio)
 {
-	struct platform_device *pdev = (struct platform_device *) arg;
-	printk("test irq comes ..., pdev = 0x%p\n", pdev);
+	printk(KERN_INFO "test irq comes ...\n");
 	return IRQ_HANDLED;
 }
 
@@ -25,12 +20,12 @@ static int test_irq_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct device_node *of_node = dev->of_node;
-	struct test_irq_info *test_irq;
+	struct uio_info *uio;
 	int ret,irq;
 
 	/* Allocate test_irq_info data structure */
-	test_irq = devm_kzalloc(dev, sizeof(*test_irq), GFP_KERNEL);
-	if (!test_irq) {
+	uio = devm_kzalloc(dev, sizeof(*uio), GFP_KERNEL);
+	if (!uio) {
 		dev_err(dev, "cannot allocate test_irq resource\n");
 		return -ENOMEM;
 	}
@@ -39,42 +34,40 @@ static int test_irq_probe(struct platform_device *pdev)
 	if (unlikely(irq == NO_IRQ)) {
 		dev_warn(&pdev->dev,"couldn't obtain test interrupt information from device tree\n");
 	}
-	test_irq->irq = irq;
 
-	dev_err(dev, "test_irq = %d\n", irq);
-	ret = devm_request_irq(dev, irq, test_irq_handler, IRQF_SHARED, "test_irq", pdev);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to request test_irq %d\n", test_irq->irq);
-		test_irq->irq = -1;
-		return -EINVAL;
-	} 
-	dev_dbg(dev, "registering interrupt %d, pdev = 0x%p\n", irq, pdev);
+	uio->irq = irq;
+	uio->version = "0.0.1";
+	uio->name = "test_irq";
+	uio->handler = test_irq_handler;
+	uio->irq_flags = IRQF_SHARED;
+	uio->priv = pdev;
 
-	platform_set_drvdata(pdev, test_irq);
-	test_irq->pdev = pdev;
-	return 0;
+	platform_set_drvdata(pdev, uio);
+	ret = uio_register_device(dev, uio);
+	return ret;
 }
 
 static int test_irq_remove(struct platform_device *pdev)
 {
-	struct test_irq_info *info = platform_get_drvdata(pdev);
-	free_irq(info->irq, pdev);
+	struct uio_info *info = platform_get_drvdata(pdev);
+	uio_unregister_device(info);
+	devm_kfree(&pdev->dev, info);
 	return 0;
 }
 
 static const struct of_device_id test_irq_ids[] = {
 	{
-	 .compatible = "spe,testirq",
-	 },
+		.compatible = "spe,testirq",
+	},
 	{},
 };
 
 static struct platform_driver test_irq_driver = {
 	.driver = {
-			   .owner = THIS_MODULE,
-			   .name = "test_irq",
-			   .of_match_table = test_irq_ids,
-			   },
+		.owner = THIS_MODULE,
+		.name = "test_irq",
+		.of_match_table = test_irq_ids,
+	},
 	.probe = test_irq_probe,
 	.remove = test_irq_remove,
 };
