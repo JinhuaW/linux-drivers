@@ -1,4 +1,4 @@
-obj-m := globalfifo.o test_irq.o
+obj-m := globalfifo.o test_irq.o misc_test.o
 
 BUILDROOT_OUTPUT=$(BUILDROOT)/output
 
@@ -11,4 +11,4 @@ clean:
 install:
 	make $(OPTIONS) INSTALL_MOD_PATH=$(BILDROOT_OUTPUT)/target INSTALL_MOD_STRIP=1 INSTALL_MOD_DIR=spe modules_install
 headers_install:
-	@echo "installing headers"
+	install -D -m 0644 export/misc_test_ioctl.h $(DESTDIR)/usr/include/linux
