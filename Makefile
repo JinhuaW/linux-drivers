@@ -1,4 +1,4 @@
-obj-m := globalfifo.o test_irq.o misc_test.o
+obj-m := globalfifo.o test_irq.o misc_test.o platform_dev.o
 
 BUILDROOT_OUTPUT=$(BUILDROOT)/output
 

@@ -66,7 +66,7 @@ int dummy_pci_remove(struct platform_device *pdev)
 	mutex_unlock(&mapping_table->mtx);
 	for (i = 0; i < BAR_NUM; i++) {
 		if (priv->pci_space[i].bar_v_addr)
-			kfree(priv->pci_space[i].bar_v_addr);
+			iounmap(priv->pci_space[i].bar_v_addr);
 	}
 	kfree(priv);
 	return 0;
@@ -76,7 +76,8 @@ int dummy_pci_probe(struct platform_device *pdev)
 {
 	int i, bus_no, ret = -1;
 	pcie_priv_t *priv;
-	bus_no = ((int )pdev) & 0xff;
+	struct resource *mem;
+	bus_no = pdev->id;  
 	for (i = 0; i <= MISC_MAX_PORT; i++) {
 		mutex_lock(&(g_pci_mapping_table[i].mtx));
 		if (g_pci_mapping_table[i].init_done && \
@@ -89,9 +90,14 @@ int dummy_pci_probe(struct platform_device *pdev)
 				return -ENOMEM;
 			}
 			priv->pdev = pdev;
-			priv->pci_space[0].bar_v_addr = kmalloc(1<<PAGE_SHIFT, GFP_KERNEL);
-			priv->pci_space[0].bar_size = 1<<PAGE_SHIFT;
-			priv->pci_space[0].bar_addr = (void *)virt_to_phys(priv->pci_space[0].bar_v_addr);
+			mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+			if (!mem) {
+				mutex_unlock(&g_pci_mapping_table[i].mtx);
+				return -EINVAL;
+			}
+			priv->pci_space[0].bar_size = mem->end - mem->start;
+			priv->pci_space[0].bar_addr = mem->start;
+			priv->pci_space[0].bar_v_addr = ioremap(mem->start, resource_size(mem));
 			priv->pci_mapping_table = &g_pci_mapping_table[i];
 			g_pci_mapping_table[i].priv = priv;
 			platform_set_drvdata(pdev, priv);
