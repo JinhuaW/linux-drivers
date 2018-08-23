@@ -65,8 +65,8 @@ int dummy_pci_remove(struct platform_device *pdev)
 	mapping_table->priv = NULL;
 	mutex_unlock(&mapping_table->mtx);
 	for (i = 0; i < BAR_NUM; i++) {
-		if (priv->pci_space[i].bar_v_addr)
-			iounmap(priv->pci_space[i].bar_v_addr);
+		//if (priv->pci_space[i].bar_v_addr)
+		//iounmap(priv->pci_space[i].bar_v_addr);
 	}
 	kfree(priv);
 	return 0;
@@ -77,8 +77,8 @@ int dummy_pci_probe(struct platform_device *pdev)
 	int i, bus_no, ret = -1;
 	pcie_priv_t *priv;
 	struct resource *mem;
-	bus_no = pdev->id;  
-	for (i = 0; i <= MISC_MAX_PORT; i++) {
+	bus_no = pdev->id;
+	for (i = 0; i < MISC_MAX_PORT; i++) {
 		mutex_lock(&(g_pci_mapping_table[i].mtx));
 		if (g_pci_mapping_table[i].init_done && \
 			g_pci_mapping_table[i].in_use == 0 && \
@@ -97,12 +97,13 @@ int dummy_pci_probe(struct platform_device *pdev)
 			}
 			priv->pci_space[0].bar_size = mem->end - mem->start;
 			priv->pci_space[0].bar_addr = mem->start;
-			priv->pci_space[0].bar_v_addr = ioremap(mem->start, resource_size(mem));
+			priv->pci_space[0].bar_v_addr = phys_to_virt(mem->start);
 			priv->pci_mapping_table = &g_pci_mapping_table[i];
 			g_pci_mapping_table[i].priv = priv;
 			platform_set_drvdata(pdev, priv);
 			g_pci_mapping_table[i].in_use = 1;
 			ret = 0;
+			mutex_unlock(&(g_pci_mapping_table[i].mtx));
 			break;
 		}
 		mutex_unlock(&(g_pci_mapping_table[i].mtx));
@@ -138,10 +139,10 @@ misc_priv_t *misc_priv_alloc(void)
 
 int switch_port_mapping(pci_mapping_t *table, pci_port_t *ents, unsigned long num)
 {
-	unsigned long long i = 0;
+	unsigned long i = 0;
 	pci_mapping_t *temp_table;
 	for (i =0 ;i < num; i++) {
-		if (ents[i].slot >= MISC_MAX_SLOT || ents[i].slot >= MISC_MAX_BAY)
+		if (ents[i].slot >= MISC_MAX_SLOT || ents[i].bay >= MISC_MAX_BAY)
 			return -1;
 		temp_table = &table[ents[i].slot * MISC_MAX_BAY + ents[i].bay];
 		mutex_lock(&temp_table->mtx);
@@ -176,7 +177,7 @@ static long misc_test_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 				mutex_unlock(&pci_mapping_mtx);
 				return -EPERM;
 			}
-			g_pci_mapping_table = kmalloc(sizeof(pci_mapping_t) * MISC_MAX_PORT, GFP_KERNEL);
+			g_pci_mapping_table = kzalloc(sizeof(pci_mapping_t) * MISC_MAX_PORT, GFP_KERNEL);
 			if (!g_pci_mapping_table) {
 				mutex_unlock(&pci_mapping_mtx);
 				return -ENOMEM;
@@ -191,6 +192,7 @@ static long misc_test_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			num = pci_array.num;
 			if (num > MISC_MAX_PORT)
 				num = MISC_MAX_PORT;
+			printk("set pcie mapping num = %lu\n", num);
 			map_ents = kzalloc(sizeof(pci_port_t) * num, GFP_KERNEL);
 			if (!map_ents) {
 				mutex_unlock(&pci_mapping_mtx);
@@ -207,6 +209,7 @@ static long misc_test_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			platform_driver_register(&dummy_pci_driver);
 			pci_mapping_done = 1;
 			mutex_unlock(&pci_mapping_mtx);
+			printk("set pcie mapping done\n");
 			break;
 		case MISC_TEST_SET_SLOT:
 			mutex_lock(&priv->mtx);
