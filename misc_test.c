@@ -17,15 +17,16 @@
 #include <linux/ioctl.h>
 #include "export/misc_test_ioctl.h"
 #include <linux/mm.h>
+#include <asm/atomic.h>
 
 #define BAR_NUM 6
 
 typedef struct pci_mapping pci_mapping_t;
 
 typedef struct pcie_address_space {
-	void *bar_addr;
-	unsigned long long bar_size;
-	void *bar_v_addr;
+	unsigned long bar_addr;
+	unsigned long bar_size;
+	unsigned long bar_v_addr;
 } pcie_address_space_t;
 
 typedef struct misc_priv {
@@ -48,12 +49,77 @@ struct pci_mapping {
 	int sec_bus_no;
 	int sub_bus_no;
 	int init_done;
+	atomic_t users;
 	pcie_priv_t *priv;
 };
 
 static pci_mapping_t *g_pci_mapping_table = NULL;
 static int pci_mapping_done = 0;
 static struct mutex pci_mapping_mtx;
+static struct kobject debug_kobj;
+
+
+ssize_t debug_show(struct kobject * kobj, struct attribute * attr, char *buf)
+{
+        int ret, i, j;
+        if (strcmp(attr->name, "status") == 0) {
+		if (!pci_mapping_done) {
+			ret = sprintf(buf, "PCIE mapping still unintialized!\n");
+		} else {
+			ret = sprintf(buf,"%-5s %-4s | %-5s %-5s | %-10s %-10s %-10s %-10s %-10s %-10s\n", \
+					"slot", "bay", "bound", "users", "BAR0", "BAR1", "BAR2", "BAR3", "BAR4", "BAR5");
+			ret += sprintf(buf + ret,"-----------------------------------------------------------------------------------------------\n");
+			for (i = 0; i < MISC_MAX_PORT; i++) {
+				mutex_lock(&(g_pci_mapping_table[i].mtx));
+				if (g_pci_mapping_table[i].in_use) {
+					ret += sprintf(buf + ret, "%-5d %-4d | %-5d %-5d | ", \
+						i / MISC_MAX_BAY, i % MISC_MAX_BAY, 1, atomic_read(&(g_pci_mapping_table[i].users)));
+					for (j = 0; j < BAR_NUM; j++) {
+						if (g_pci_mapping_table[i].priv->pci_space[j].bar_addr)
+							ret += sprintf(buf + ret, "0x%08lx ", g_pci_mapping_table[i].priv->pci_space[j].bar_addr);
+						else
+							ret += sprintf(buf + ret, "           ");
+					}
+					ret += sprintf(buf + ret, "\n");
+				} else {
+					ret += sprintf(buf + ret, "%-5d %-4d | %-5d %-5d |\n", \
+						i / MISC_MAX_BAY, i % MISC_MAX_BAY, 0, atomic_read(&(g_pci_mapping_table[i].users)));
+				}
+				mutex_unlock(&(g_pci_mapping_table[i].mtx));
+			}
+		}
+	} else {
+		ret = -EIO;
+	}
+
+        return ret;
+}
+
+ssize_t debug_store(struct kobject * kobj, struct attribute * attr, const char *buf, size_t count)
+{
+        return -EINVAL;
+}
+
+
+static struct attribute status_attr = {
+	.name = "status",
+	.mode = S_IRUGO,
+};
+
+static struct attribute *debug_attrs[] = {
+	&status_attr,
+        NULL
+};
+
+static struct sysfs_ops debug_sysfs_ops = {
+        .show = debug_show,
+        .store = debug_store
+};
+
+static struct kobj_type debug_kobj_type = {
+        .sysfs_ops = &debug_sysfs_ops,
+        .default_attrs = debug_attrs,
+};
 
 int dummy_pci_remove(struct platform_device *pdev)
 {
@@ -61,6 +127,7 @@ int dummy_pci_remove(struct platform_device *pdev)
 	pcie_priv_t *priv = platform_get_drvdata(pdev);
 	pci_mapping_t *mapping_table = priv->pci_mapping_table;
 	mutex_lock(&mapping_table->mtx);
+	atomic_set(&(g_pci_mapping_table[i].users), 0);
 	mapping_table->in_use = 0;
 	mapping_table->priv = NULL;
 	mutex_unlock(&mapping_table->mtx);
@@ -97,11 +164,12 @@ int dummy_pci_probe(struct platform_device *pdev)
 			}
 			priv->pci_space[0].bar_size = mem->end - mem->start;
 			priv->pci_space[0].bar_addr = mem->start;
-			priv->pci_space[0].bar_v_addr = phys_to_virt(mem->start);
+			priv->pci_space[0].bar_v_addr = (unsigned long) phys_to_virt(mem->start);
 			priv->pci_mapping_table = &g_pci_mapping_table[i];
 			g_pci_mapping_table[i].priv = priv;
 			platform_set_drvdata(pdev, priv);
 			g_pci_mapping_table[i].in_use = 1;
+			atomic_set(&(g_pci_mapping_table[i].users), 0);
 			ret = 0;
 			mutex_unlock(&(g_pci_mapping_table[i].mtx));
 			break;
@@ -222,8 +290,16 @@ static long misc_test_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 				return -EFAULT;
 			}
 			if (pos.slot >= MISC_MAX_SLOT || pos.bay >= MISC_MAX_BAY) {
+				mutex_unlock(&(priv->mtx));
 				return -EFAULT;
 			}
+			if (atomic_inc_return(&(g_pci_mapping_table[pos.slot * MISC_MAX_BAY + pos.bay].users)) > 1) {
+				atomic_dec(&(g_pci_mapping_table[pos.slot * MISC_MAX_BAY + pos.bay].users));
+				mutex_unlock(&(priv->mtx));
+				return -EBUSY;
+			}
+			priv->port.slot = pos.slot;
+			priv->port.bay = pos.bay;
 			priv->pci_mapping_table = &g_pci_mapping_table[pos.slot * MISC_MAX_BAY + pos.bay];
 			priv->init_done = 1;
 			mutex_unlock(&priv->mtx);
@@ -245,6 +321,13 @@ static int misc_test_open(struct inode *inode, struct file *filp)
 
 static int misc_test_close(struct inode *inode, struct file *filp)
 {
+	misc_priv_t *priv = filp->private_data;
+	mutex_lock(&(priv->mtx));
+	if (priv->init_done) {
+		atomic_dec(&(priv->pci_mapping_table->users));
+	}
+	mutex_unlock(&(priv->mtx));
+	kfree(priv);
 	return 0;
 }
 
@@ -258,7 +341,13 @@ static int misc_test_mmap(struct file * filp, struct vm_area_struct *vma)
 	if (!priv->pci_mapping_table->in_use) {//lock needed?
 		return -ENODEV;
 	}
+	if (priv->bar >= BAR_NUM) {
+		return -EINVAL;
+	}
 	paddr = (unsigned long) priv->pci_mapping_table->priv->pci_space[priv->bar].bar_addr;
+	if (!paddr) {
+		return -EFAULT;
+	}
 	size  = priv->pci_mapping_table->priv->pci_space[priv->bar].bar_size;
 
 	pfn = paddr >> PAGE_SHIFT;
@@ -296,11 +385,16 @@ static int __init misc_test_init(void)
 	int ret;
 	mutex_init(&pci_mapping_mtx);
 	ret = misc_register(&misc_test_miscdev);
+	ret = kobject_init_and_add(&debug_kobj, &debug_kobj_type, &(misc_test_miscdev.this_device->kobj), "debug");
+        if (ret) {
+		printk("Can't add debug kobject resource!\n");
+	}
 	return ret;
 }
 
 static void __exit misc_test_exit(void)
 {
+	kobject_put(&debug_kobj);
 	misc_deregister(&misc_test_miscdev);
 }
 
